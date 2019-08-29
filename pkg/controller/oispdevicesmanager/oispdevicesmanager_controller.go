@@ -3,6 +3,7 @@ package oispdevicesmanager
 import (
 	"context"
 	//"fmt"
+	//"encoding/json"
 	generror "errors"
 
 	oispv1alpha1 "github.com/oisp-devices-operator/pkg/apis/oisp/v1alpha1"
@@ -99,8 +100,9 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 	// fetch the OispDevicesManager instance
 	if (request.Namespace != "") {
 		instance := &oispv1alpha1.OispDevicesManager{}
+		reqLogger.Info("Marcel: before instance ", "instance", instance)
 		err := r.client.Get(context.TODO(), request.NamespacedName, instance)
-		reqLogger.Info("Marcel: process devicemanager ", "Error", err)
+		reqLogger.Info("Marcel: process devicemanager ", "instance", instance, "Error", err)
 		if err != nil {
 			if errors.IsNotFound(err) {
 				// Request object not found, could have been deleted after reconcile request.
@@ -126,7 +128,7 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 		if (instance.Spec.WatchLabelValue != "") {
 			reqLogger.Info("Marcel912: adding watchLabel", "watchLabelKey", instance.Spec.WatchLabelKey, "watchLabelValue", instance.Spec.WatchLabelValue)
 			nodes, err := r.getNodesWithLabel(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue)
-			reqLogger.Info("Node found", "nodeList", nodes, "err", err)
+			reqLogger.Info("Nodes found", "nodes", nodes.Items, "err", err)
 			if err != nil { // if fetching nodes was not successful, try it later again
 				return reconcile.Result{}, err
 			}
@@ -138,7 +140,7 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 			return reconcile.Result{}, generror.New("No label value given")
 		}
 
-		reqLogger.Info("Marcel123 now updating")
+		reqLogger.Info("Marcel123 now updating state")
 		// Update State
 		err = r.client.Status().Update(context.TODO(), instance)
 		if err != nil {
@@ -152,9 +154,20 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 }
 
 func (r *ReconcileOispDevicesManager) getNodesWithLabel(key string, value string) (*corev1.NodeList, error) {
-	node := &corev1.NodeList{}
+	//opts := &client.ListOptions{Namespace: "kube-system"}
+	//opts.SetLabelSelector(fmt.Sprintf("app=%s", "name"))
+	//opts.InNamespace("kube-system")
+	//opts := &client.ListOptions{}
 	sel := labels.Set{key: value};
-	options := &client.ListOptions{LabelSelector: sel.AsSelector()}
-	err := r.client.List(context.TODO(), options, node)
-	return node, err
+	opts := &client.ListOptions{LabelSelector: sel.AsSelector()}
+	nodes := &corev1.NodeList{}
+	//oispDevicesManagerList := &oispv1alpha1.OispDevicesManagerList{}
+	err := r.client.List(context.TODO(), opts, nodes)
+	//nodes := &corev1.NodeList{}
+	//sel := labels.Set{"kubernetes.io/arch": "amd64"};
+	//options := client.ListOptions{LabelSelector: sel.AsSelector()}
+	//options := client.ListOptions{}
+	//err := r.client.List(context.TODO(), &options, nodes)
+	//log.Info("Received", "nodes", nodes.Items)
+	return nodes, err
 }
