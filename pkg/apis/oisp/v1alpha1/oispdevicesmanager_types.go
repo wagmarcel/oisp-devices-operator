@@ -17,6 +17,7 @@ type OispDevicesManagerSpec struct {
 	// Tag to identify oisp-managed nodes
 	WatchLabelKey string `json:"watchLabelKey"`
 	WatchLabelValue string `json:"watchLabelValue"`
+	WatchAnnotationKey string `json:"watchAnnotationKey"`
 }
 
 // OispDevicesManagerStatus defines the observed state of OispDevicesManager

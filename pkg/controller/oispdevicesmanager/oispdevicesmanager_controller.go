@@ -72,8 +72,9 @@ var _ reconcile.Reconciler = &ReconcileOispDevicesManager{}
 
 // labelNodes: list of nodes with a specific label
 type labelNode struct{
-	value string
-	nodes *corev1.NodeList
+	labelValue string
+	annotationKey string
+	nodes []*corev1.Node
 }
 
 // ReconcileOispDevicesManager reconciles a OispDevicesManager object
@@ -124,15 +125,19 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 			_ = r.client.Status().Update(context.TODO(), instance)
 			return reconcile.Result{}, generror.New("No label key given")
 		}
+		if (instance.Spec.WatchAnnotationKey == "") {
+			instance.Status.Phase = oispv1alpha1.PhaseError
+			_ = r.client.Status().Update(context.TODO(), instance)
+			return reconcile.Result{}, generror.New("No Annotation key given")
+		}
 		// if there is label key and value, get initial list of interesting nodes
-		if (instance.Spec.WatchLabelValue != "") {
-			reqLogger.Info("Marcel912: adding watchLabel", "watchLabelKey", instance.Spec.WatchLabelKey, "watchLabelValue", instance.Spec.WatchLabelValue)
-			nodes, err := r.getNodesWithLabel(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue)
-			reqLogger.Info("Nodes found", "nodes", nodes.Items, "err", err)
+		if (instance.Spec.WatchLabelValue != "" && instance.Spec.WatchAnnotationKey != "") {
+			nodes, err := r.getNodesWithLabelAndSensorAnnotation(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue, instance.Spec.WatchAnnotationKey)
+			reqLogger.Info("Nodes found", "nodes", nodes, "err", err)
 			if err != nil { // if fetching nodes was not successful, try it later again
 				return reconcile.Result{}, err
 			}
-			r.labelNodes[instance.Spec.WatchLabelKey] = &labelNode{value: instance.Spec.WatchLabelValue, nodes: nodes}
+			r.labelNodes[instance.Spec.WatchLabelKey] = &labelNode{labelValue: instance.Spec.WatchLabelValue, annotationKey: instance.Spec.WatchAnnotationKey, nodes: nodes}
 			instance.Status.Phase = oispv1alpha1.PhaseRunning
 		} else {
 			instance.Status.Phase = oispv1alpha1.PhaseError
@@ -153,21 +158,23 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 	return reconcile.Result{}, nil
 }
 
-func (r *ReconcileOispDevicesManager) getNodesWithLabel(key string, value string) (*corev1.NodeList, error) {
-	//opts := &client.ListOptions{Namespace: "kube-system"}
-	//opts.SetLabelSelector(fmt.Sprintf("app=%s", "name"))
-	//opts.InNamespace("kube-system")
-	//opts := &client.ListOptions{}
+func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key string, value string, annotationKey string) ([]*corev1.Node, error) {
+	log.Info("getNodesWithLabelAndSensorAnnotation", "AnnotationKey", annotationKey)
+	result := []*corev1.Node{}
 	sel := labels.Set{key: value};
 	opts := &client.ListOptions{LabelSelector: sel.AsSelector()}
 	nodes := &corev1.NodeList{}
-	//oispDevicesManagerList := &oispv1alpha1.OispDevicesManagerList{}
 	err := r.client.List(context.TODO(), opts, nodes)
-	//nodes := &corev1.NodeList{}
-	//sel := labels.Set{"kubernetes.io/arch": "amd64"};
-	//options := client.ListOptions{LabelSelector: sel.AsSelector()}
-	//options := client.ListOptions{}
-	//err := r.client.List(context.TODO(), &options, nodes)
-	//log.Info("Received", "nodes", nodes.Items)
-	return nodes, err
+	for _, element := range nodes.Items {
+		log.Info("Processing node", "name", element.ObjectMeta.GetName())
+		annotations := element.ObjectMeta.GetAnnotations()
+		for annk, annv := range annotations {
+			log.Info("Processing annotation", "annk", annk, "annv", annv)
+			if annk == annotationKey {
+				log.Info("Adding current node to result")
+				result = append(result, &element)
+			}
+		}
+	}
+	return result, err
 }
