@@ -2,13 +2,18 @@ package oispdevicesmanager
 
 import (
 	"context"
+	"io/ioutil"
 	//"fmt"
 	//"encoding/json"
 	generror "errors"
 
 	oispv1alpha1 "github.com/oisp-devices-operator/pkg/apis/oisp/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+
+	"k8s.io/apimachinery/pkg/runtime/serializer/json"
+	"k8s.io/client-go/kubernetes/scheme"
 	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/labels"
@@ -74,7 +79,7 @@ var _ reconcile.Reconciler = &ReconcileOispDevicesManager{}
 type labelNode struct{
 	labelValue string
 	annotationKey string
-	nodes []*corev1.Node
+	nodes map[string]*corev1.Node
 }
 
 // ReconcileOispDevicesManager reconciles a OispDevicesManager object
@@ -101,9 +106,7 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 	// fetch the OispDevicesManager instance
 	if (request.Namespace != "") {
 		instance := &oispv1alpha1.OispDevicesManager{}
-		reqLogger.Info("Marcel: before instance ", "instance", instance)
 		err := r.client.Get(context.TODO(), request.NamespacedName, instance)
-		reqLogger.Info("Marcel: process devicemanager ", "instance", instance, "Error", err)
 		if err != nil {
 			if errors.IsNotFound(err) {
 				// Request object not found, could have been deleted after reconcile request.
@@ -138,6 +141,9 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 				return reconcile.Result{}, err
 			}
 			r.labelNodes[instance.Spec.WatchLabelKey] = &labelNode{labelValue: instance.Spec.WatchLabelValue, annotationKey: instance.Spec.WatchAnnotationKey, nodes: nodes}
+			if (len(nodes) > 0) { // check the deployments and create new when not existing
+				r.createDevicePluginDeployments(instance, nodes)
+			}
 			instance.Status.Phase = oispv1alpha1.PhaseRunning
 		} else {
 			instance.Status.Phase = oispv1alpha1.PhaseError
@@ -145,7 +151,6 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 			return reconcile.Result{}, generror.New("No label value given")
 		}
 
-		reqLogger.Info("Marcel123 now updating state")
 		// Update State
 		err = r.client.Status().Update(context.TODO(), instance)
 		if err != nil {
@@ -158,23 +163,55 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 	return reconcile.Result{}, nil
 }
 
-func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key string, value string, annotationKey string) ([]*corev1.Node, error) {
+func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key string, value string, annotationKey string) (map[string]*corev1.Node, error) {
 	log.Info("getNodesWithLabelAndSensorAnnotation", "AnnotationKey", annotationKey)
-	result := []*corev1.Node{}
+	result := map[string]*corev1.Node{}
 	sel := labels.Set{key: value};
 	opts := &client.ListOptions{LabelSelector: sel.AsSelector()}
 	nodes := &corev1.NodeList{}
 	err := r.client.List(context.TODO(), opts, nodes)
 	for _, element := range nodes.Items {
-		log.Info("Processing node", "name", element.ObjectMeta.GetName())
+		name := element.ObjectMeta.GetName()
 		annotations := element.ObjectMeta.GetAnnotations()
-		for annk, annv := range annotations {
-			log.Info("Processing annotation", "annk", annk, "annv", annv)
+		for annk, _ := range annotations {
 			if annk == annotationKey {
-				log.Info("Adding current node to result")
-				result = append(result, &element)
+				log.Info("Adding current node to result", "name", name)
+				result[name] = &element
 			}
 		}
 	}
 	return result, err
+}
+
+
+func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManager *oispv1alpha1.OispDevicesManager, nodes map[string]*corev1.Node) *appsv1.Deployment {
+	log.Info("createDevicePluginDeployment")
+	ls := labelsForDevicePlugin(deviceManager.Name)
+	name := "ddd" //nodes[0].ObjectMeta.GetName() + "-deviceplugin-deployment"
+	log.Info("labels&Name", "name", name, "ls", ls, "nodes", nodes)
+
+	dep := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
+	log.Info("deserialized?", "dep", dep)
+	//controllerutil.SetControllerReference(deviceManager, dep, r.scheme)
+	return nil
+}
+
+func labelsForDevicePlugin(name string) map[string]string {
+	return map[string]string{"app": "oisp-device-plugin"}
+}
+
+func deserializeDeployment(filename string) *appsv1.Deployment {
+	dat, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return nil
+	}
+	var dep appsv1.Deployment
+	s := json.NewYAMLSerializer(json.DefaultMetaFactory, scheme.Scheme,
+			   scheme.Scheme)
+ 	_, _, err = s.Decode([]byte(dat), nil, &dep)
+	//obj, _, err := decode([]byte(dat), nil, nil)
+	if err != nil {
+		return nil
+	}
+	return &dep
 }

@@ -1,0 +1,28 @@
+ComponentsSpec:
+    namespace: "oisp.net"
+    components:
+    - type: "generic"
+      componentId: "C0000000"
+      mapping:
+          hostPath: "/dev/ttyS1"
+          containerPath: "/dev/ttyTest"
+          permission: "rw"
+    - type: "mraa"
+      componentId: "C0000001"
+
+---
+DevicesSpec:
+    - deviceId: "11:22:33:44:55:66"
+      components:
+      - componentId: "C0000000"
+        configId: "X0000001"
+      - componentId: "C0000001"
+        configId: "X000002"
+    - deviceId: "22:33:44:55:66:77"
+      components:
+        - componentId: "C0000001"
+          configId: "X0000002"
+---
+ConfigSpec:
+    - configId: "X0000001"
+    -
