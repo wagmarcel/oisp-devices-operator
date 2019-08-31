@@ -12,8 +12,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 
-	"k8s.io/apimachinery/pkg/runtime/serializer/json"
-	"k8s.io/client-go/kubernetes/scheme"
+	//"k8s.io/apimachinery/pkg/runtime/serializer/json"
+	//"k8s.io/client-go/kubernetes/scheme"
+	//"k8s.io/apimachinery/pkg/runtime/schema"
 	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/labels"
@@ -26,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	"sigs.k8s.io/yaml"
 	//"github.com/operator-framework/operator-sdk/pkg/k8sutil"
 )
 
@@ -186,12 +188,23 @@ func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key s
 
 func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManager *oispv1alpha1.OispDevicesManager, nodes map[string]*corev1.Node) *appsv1.Deployment {
 	log.Info("createDevicePluginDeployment")
-	ls := labelsForDevicePlugin(deviceManager.Name)
-	name := "ddd" //nodes[0].ObjectMeta.GetName() + "-deviceplugin-deployment"
-	log.Info("labels&Name", "name", name, "ls", ls, "nodes", nodes)
+	nameSpace := deviceManager.GetObjectMeta().GetNamespace()
+	nodeSelector := map[string]string{deviceManager.Spec.WatchLabelKey: deviceManager.Spec.WatchLabelValue}
 
 	dep := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
-	log.Info("deserialized?", "dep", dep)
+
+	for _, element := range nodes {
+		name := element.GetObjectMeta().GetName() + "-oispDevices-Deployment"
+		dep.GetObjectMeta().SetName(name)
+		dep.GetObjectMeta().SetNamespace(nameSpace)
+		dep.Spec.Template.Spec.NodeSelector = nodeSelector
+		config := element.GetObjectMeta().GetAnnotations()[deviceManager.Spec.WatchAnnotationKey]
+		configEnv := corev1.EnvVar{Name: "PLUGIN_CONFIG", Value: config}
+		dep.Spec.Template.Spec.Containers[0].Env = append(dep.Spec.Template.Spec.Containers[0].Env, configEnv)
+		log.Info("Create deployment for node ", "name", name, "nameSpace", nameSpace, "config", config)
+	}
+
+	log.Info("deserialized?", "dep", dep.Spec)
 	//controllerutil.SetControllerReference(deviceManager, dep, r.scheme)
 	return nil
 }
@@ -205,11 +218,10 @@ func deserializeDeployment(filename string) *appsv1.Deployment {
 	if err != nil {
 		return nil
 	}
-	var dep appsv1.Deployment
-	s := json.NewYAMLSerializer(json.DefaultMetaFactory, scheme.Scheme,
-			   scheme.Scheme)
- 	_, _, err = s.Decode([]byte(dat), nil, &dep)
-	//obj, _, err := decode([]byte(dat), nil, nil)
+	dep := appsv1.Deployment{}
+	err = yaml.Unmarshal(dat, &dep)
+
+	//log.Info("after", "dep", dep.Spec, "err", err)
 	if err != nil {
 		return nil
 	}
