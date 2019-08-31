@@ -3,6 +3,7 @@ package oispdevicesmanager
 import (
 	"context"
 	"io/ioutil"
+	"reflect"
 	//"fmt"
 	//"encoding/json"
 	generror "errors"
@@ -18,10 +19,10 @@ import (
 	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/labels"
-	//"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
-	//"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -47,7 +48,7 @@ func Add(mgr manager.Manager) error {
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 	return &ReconcileOispDevicesManager{client: mgr.GetClient(), scheme: mgr.GetScheme(),
-		labelNodes: make(map[string] *labelNode)}
+		deviceManagerNodes: make(map[string] *deviceManagerNodes)}
 }
 
 // add adds a new Controller to mgr with r as the reconcile.Reconciler
@@ -78,9 +79,8 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 var _ reconcile.Reconciler = &ReconcileOispDevicesManager{}
 
 // labelNodes: list of nodes with a specific label
-type labelNode struct{
-	labelValue string
-	annotationKey string
+type deviceManagerNodes struct{
+	deviceManager *oispv1alpha1.OispDevicesManager
 	nodes map[string]*corev1.Node
 }
 
@@ -90,7 +90,7 @@ type ReconcileOispDevicesManager struct {
 	// that reads objects from the cache and writes to the apiserver
 	client client.Client
 	scheme *runtime.Scheme
-	labelNodes map[string]*labelNode
+	deviceManagerNodes map[string]*deviceManagerNodes
 }
 
 // Reconcile reads that state of the cluster for a OispDevicesManager object and makes changes based on the state read
@@ -138,11 +138,11 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 		// if there is label key and value, get initial list of interesting nodes
 		if (instance.Spec.WatchLabelValue != "" && instance.Spec.WatchAnnotationKey != "") {
 			nodes, err := r.getNodesWithLabelAndSensorAnnotation(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue, instance.Spec.WatchAnnotationKey)
-			reqLogger.Info("Nodes found", "nodes", nodes, "err", err)
+			reqLogger.Info("Nodes found", "numnodes", len(nodes), "err", err)
 			if err != nil { // if fetching nodes was not successful, try it later again
 				return reconcile.Result{}, err
 			}
-			r.labelNodes[instance.Spec.WatchLabelKey] = &labelNode{labelValue: instance.Spec.WatchLabelValue, annotationKey: instance.Spec.WatchAnnotationKey, nodes: nodes}
+			r.deviceManagerNodes[getGlobalKey(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue)] = &deviceManagerNodes{deviceManager: instance.DeepCopy(), nodes: nodes}
 			if (len(nodes) > 0) { // check the deployments and create new when not existing
 				rec, err := r.createDevicePluginDeployments(instance, nodes)
 				if (err != nil) {
@@ -161,11 +161,28 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 		if err != nil {
 			return reconcile.Result{}, err
 		}
-	} else { //node given, update all nodes from the labelNodes list
-		//getNodesWithLabel()
+	} else { //node given, check whether node was updated
+		node := corev1.Node{}
+		err := r.client.Get(context.TODO(), request.NamespacedName, &node)
+		log.Info("node update request", "node", node.Name, "err", err)
+		//check for every devices manager whether node is listed
+		for lk, _ := range r.deviceManagerNodes {
+			//log.Info("checking nodes", "label key", lk, "nodes", len(r.deviceManagerNodes[lk].nodes)
+			if (r.deviceManagerNodes[lk].nodes[node.Name] != nil) {
+				log.Info("Marcel: node exists already. Checking labels and annotations")
+				if (reflect.DeepEqual(node.Labels, r.deviceManagerNodes[lk].nodes[node.Name].Labels) && reflect.DeepEqual(node.Annotations, r.deviceManagerNodes[lk].nodes[node.Name].Annotations)) {
+					log.Info("Marcel: node labales are equall.")
+					return reconcile.Result{}, nil //done, node did not change (from label and ann pov)
+				}
+			}
+		}
 	}
 	reqLogger.Info("Job done.")
 	return reconcile.Result{}, nil
+}
+
+func getGlobalKey(key string, value string) string {
+	return key + "." + value
 }
 
 func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key string, value string, annotationKey string) (map[string]*corev1.Node, error) {
@@ -211,12 +228,23 @@ func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManage
 	for _, element := range nodes {
 		dep := createDevicePluginDeployment(element, nameSpace, nodeSelector, template, deviceManager.Spec.WatchAnnotationKey)
 		log.Info("Create Deployment", "dep", dep.Spec)
-		err := r.client.Create(context.TODO(), dep)
-		if err != nil {
+		if err := controllerutil.SetControllerReference(dep, deviceManager, r.scheme); err != nil {
 			return reconcile.Result{}, err
 		}
+		found := &appsv1.Deployment{}
+		err := r.client.Get(context.TODO(), types.NamespacedName{Name: dep.Name, Namespace: dep.Namespace}, found)
+		if err != nil && errors.IsNotFound(err) {
+			log.Info("Creating a new Deployment", "Deployment.Name", dep.Name)
+			if err := r.client.Create(context.TODO(), dep); err != nil {
+				return reconcile.Result{}, err
+			}
+		} else { //deployment exists, update it
+			log.Info("Updating Deployment", "Deployment.Name", dep.Name)
+			if err := r.client.Update(context.TODO(), dep); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
 	}
-
 	//controllerutil.SetControllerReference(deviceManager, dep, r.scheme)
 	return reconcile.Result{}, nil
 }
