@@ -144,7 +144,10 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 			}
 			r.labelNodes[instance.Spec.WatchLabelKey] = &labelNode{labelValue: instance.Spec.WatchLabelValue, annotationKey: instance.Spec.WatchAnnotationKey, nodes: nodes}
 			if (len(nodes) > 0) { // check the deployments and create new when not existing
-				r.createDevicePluginDeployments(instance, nodes)
+				rec, err := r.createDevicePluginDeployments(instance, nodes)
+				if (err != nil) {
+					return rec, err
+				}
 			}
 			instance.Status.Phase = oispv1alpha1.PhaseRunning
 		} else {
@@ -185,28 +188,37 @@ func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key s
 	return result, err
 }
 
-
-func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManager *oispv1alpha1.OispDevicesManager, nodes map[string]*corev1.Node) *appsv1.Deployment {
+func createDevicePluginDeployment(node *corev1.Node, nameSpace string,
+	nodeSelector map[string]string, template *appsv1.Deployment, annKey string) *appsv1.Deployment {
+	dep := template.DeepCopy()
+	name := node.GetObjectMeta().GetName() + "-oispdevices-deployment"
+	dep.GetObjectMeta().SetName(name)
+	dep.GetObjectMeta().SetNamespace(nameSpace)
+	dep.Spec.Template.Spec.NodeSelector = nodeSelector
+	config := node.GetObjectMeta().GetAnnotations()[annKey]
+	configEnv := corev1.EnvVar{Name: "PLUGIN_CONFIG", Value: config}
+	dep.Spec.Template.Spec.Containers[0].Env = append(dep.Spec.Template.Spec.Containers[0].Env, configEnv)
+	return dep
+}
+func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManager *oispv1alpha1.OispDevicesManager,
+	nodes map[string]*corev1.Node) (reconcile.Result, error) {
 	log.Info("createDevicePluginDeployment")
 	nameSpace := deviceManager.GetObjectMeta().GetNamespace()
 	nodeSelector := map[string]string{deviceManager.Spec.WatchLabelKey: deviceManager.Spec.WatchLabelValue}
 
-	dep := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
+	template := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
 
 	for _, element := range nodes {
-		name := element.GetObjectMeta().GetName() + "-oispDevices-Deployment"
-		dep.GetObjectMeta().SetName(name)
-		dep.GetObjectMeta().SetNamespace(nameSpace)
-		dep.Spec.Template.Spec.NodeSelector = nodeSelector
-		config := element.GetObjectMeta().GetAnnotations()[deviceManager.Spec.WatchAnnotationKey]
-		configEnv := corev1.EnvVar{Name: "PLUGIN_CONFIG", Value: config}
-		dep.Spec.Template.Spec.Containers[0].Env = append(dep.Spec.Template.Spec.Containers[0].Env, configEnv)
-		log.Info("Create deployment for node ", "name", name, "nameSpace", nameSpace, "config", config)
+		dep := createDevicePluginDeployment(element, nameSpace, nodeSelector, template, deviceManager.Spec.WatchAnnotationKey)
+		log.Info("Create Deployment", "dep", dep.Spec)
+		err := r.client.Create(context.TODO(), dep)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 
-	log.Info("deserialized?", "dep", dep.Spec)
 	//controllerutil.SetControllerReference(deviceManager, dep, r.scheme)
-	return nil
+	return reconcile.Result{}, nil
 }
 
 func labelsForDevicePlugin(name string) map[string]string {
