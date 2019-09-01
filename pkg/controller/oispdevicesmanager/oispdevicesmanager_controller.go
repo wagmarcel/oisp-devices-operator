@@ -65,8 +65,7 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	// TODO(user): Modify this to be the types you create that are owned by the primary resource
-	// Watch for changes to secondary resource Pods and requeue the owner OispDevicesManager
+	// Nodes are watched to find out which secondary resources should be scheduled
 	err = c.Watch(&source.Kind{Type: &corev1.Node{}}, &handler.EnqueueRequestForObject{})
 	if err != nil {
 		return err
@@ -104,9 +103,13 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling OispDevicesManager")
 
-	// if not a node (i.e. has namespace)
+	// There could be two Kinds: (1) OispDeviceMananger and (2) Nodes. Nodes are detetctetd by missing namespace
 	// fetch the OispDevicesManager instance
 	if (request.Namespace != "") {
+		// OispDeviceManager Status has 3 phases:
+		// (1) PENDING - after initialization. Will go to RUNNING when the necessary WatchLabelKey/Value and Annotation Key is found
+		// (2) RUNNING - a valid OispDeviceManager has been found and registered with operator
+		// (3) ERROR   - error condition met
 		instance := &oispv1alpha1.OispDevicesManager{}
 		err := r.client.Get(context.TODO(), request.NamespacedName, instance)
 		if err != nil {
@@ -119,43 +122,44 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 			// Error reading the object - requeue the request.
 			return reconcile.Result{}, err
 		}
+
+		// Phase transition: When nothing defined go to PENDING
 		if (instance.Status.Phase == "") {
 			instance.Status.Phase = oispv1alpha1.PhasePending
 		}
 
-		// Initialize and set to RUNNING if possible
-		// If there is not label key, go in error state.
+		// If there is not LabelKey => ERROR
 		if (instance.Spec.WatchLabelKey == "") {
 			instance.Status.Phase = oispv1alpha1.PhaseError
 			_ = r.client.Status().Update(context.TODO(), instance)
 			return reconcile.Result{}, generror.New("No label key given")
 		}
+		// If there is no Annotation Key => ERROR
 		if (instance.Spec.WatchAnnotationKey == "") {
 			instance.Status.Phase = oispv1alpha1.PhaseError
 			_ = r.client.Status().Update(context.TODO(), instance)
 			return reconcile.Result{}, generror.New("No Annotation key given")
 		}
-		// if there is label key and value, get initial list of interesting nodes
-		if (instance.Spec.WatchLabelValue != "" && instance.Spec.WatchAnnotationKey != "") {
-			nodes, err := r.getNodesWithLabelAndSensorAnnotation(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue, instance.Spec.WatchAnnotationKey)
-			reqLogger.Info("Nodes found", "numnodes", len(nodes), "err", err)
-			if err != nil { // if fetching nodes was not successful, try it later again
-				return reconcile.Result{}, err
-			}
-			r.deviceManagerNodes[getGlobalKey(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue)] = &deviceManagerNodes{deviceManager: instance.DeepCopy(), nodes: nodes}
-			if (len(nodes) > 0) { // check the deployments and create new when not existing
-				rec, err := r.createDevicePluginDeployments(instance, nodes)
-				if (err != nil) {
-					return rec, err
-				}
-			}
-			instance.Status.Phase = oispv1alpha1.PhaseRunning
-		} else {
-			instance.Status.Phase = oispv1alpha1.PhaseError
-			_ = r.client.Status().Update(context.TODO(), instance)
-			return reconcile.Result{}, generror.New("No label value given")
-		}
 
+		// At this point, labelkey and annkey should be defined properly
+		// LabelValue can be empty
+		// Get all Nodes which provid the right labels and annotations
+		nodes, err := r.getNodesWithLabelAndSensorAnnotation(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue, instance.Spec.WatchAnnotationKey)
+		reqLogger.Info("Nodes found", "number of nodes", len(nodes), "err", err)
+		if err != nil { // if fetching nodes was not successful, try it later again
+			return reconcile.Result{}, err
+		}
+		// Register OispManager with Operator
+		// This is needed to check later events from Nodes (which can apply to different operators)
+		// global key is needed because the oispManager needs to be identified uniquely in a map
+		r.deviceManagerNodes[getGlobalKey(instance.Spec.WatchLabelKey, instance.Spec.WatchLabelValue)] = &deviceManagerNodes{deviceManager: instance.DeepCopy(), nodes: nodes}
+		if (len(nodes) > 0) { // check the deployments and create new when not existing
+			rec, err := r.createDevicePluginDeployments(instance, nodes)
+			if (err != nil) {
+				return rec, err
+			}
+		}
+		instance.Status.Phase = oispv1alpha1.PhaseRunning
 		// Update State
 		err = r.client.Status().Update(context.TODO(), instance)
 		if err != nil {
@@ -167,12 +171,20 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 		log.Info("node update request", "node", node.Name, "err", err)
 		//check for every devices manager whether node is listed
 		for lk, _ := range r.deviceManagerNodes {
-			//log.Info("checking nodes", "label key", lk, "nodes", len(r.deviceManagerNodes[lk].nodes)
 			if (r.deviceManagerNodes[lk].nodes[node.Name] != nil) {
-				log.Info("Marcel: node exists already. Checking labels and annotations")
-				if (reflect.DeepEqual(node.Labels, r.deviceManagerNodes[lk].nodes[node.Name].Labels) && reflect.DeepEqual(node.Annotations, r.deviceManagerNodes[lk].nodes[node.Name].Annotations)) {
-					log.Info("Marcel: node labales are equall.")
+				labels := r.deviceManagerNodes[lk].nodes[node.Name].GetObjectMeta().GetLabels()
+				annotations := r.deviceManagerNodes[lk].nodes[node.Name].GetObjectMeta().GetAnnotations()
+				log.Info("Marcel: Node exists already. Checking updates for labels and annotations", "deviceManager", lk)
+				if (reflect.DeepEqual(node.GetObjectMeta().GetLabels(), labels) && reflect.DeepEqual(node.GetObjectMeta().GetAnnotations(), annotations)) {
+					log.Info("Node labels and annotations did not change.")
 					return reconcile.Result{}, nil //done, node did not change (from label and ann pov)
+				}
+				// Either Labels or Annotations changed. Investigate the changes and register node if appropriate
+				watchLabelKey := r.deviceManagerNodes[lk].deviceManager.Spec.WatchLabelKey
+				watchAnnKey := r.deviceManagerNodes[lk].deviceManager.Spec.WatchAnnotationKey
+				if (node.GetObjectMeta().GetLabels()[watchLabelKey] != "" && node.GetObjectMeta().GetAnnotations()[watchAnnKey] != "") {
+					// Node should be added to the list of the current deviceManager
+
 				}
 			}
 		}
@@ -193,19 +205,19 @@ func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key s
 	nodes := &corev1.NodeList{}
 	err := r.client.List(context.TODO(), opts, nodes)
 	for _, element := range nodes.Items {
-		name := element.ObjectMeta.GetName()
-		annotations := element.ObjectMeta.GetAnnotations()
+		name := element.GetObjectMeta().GetName()
+		annotations := element.GetObjectMeta().GetAnnotations()
 		for annk, _ := range annotations {
 			if annk == annotationKey {
 				log.Info("Adding current node to result", "name", name)
-				result[name] = &element
+				result[name] = element.DeepCopy()
 			}
 		}
 	}
 	return result, err
 }
 
-func createDevicePluginDeployment(node *corev1.Node, nameSpace string,
+func createDevicePluginDeploymentTemplate(node *corev1.Node, nameSpace string,
 	nodeSelector map[string]string, template *appsv1.Deployment, annKey string) *appsv1.Deployment {
 	dep := template.DeepCopy()
 	name := node.GetObjectMeta().GetName() + "-oispdevices-deployment"
@@ -217,32 +229,40 @@ func createDevicePluginDeployment(node *corev1.Node, nameSpace string,
 	dep.Spec.Template.Spec.Containers[0].Env = append(dep.Spec.Template.Spec.Containers[0].Env, configEnv)
 	return dep
 }
+
+func (r *ReconcileOispDevicesManager) createOrUpdateDevicePluginDeployment(node *corev1.Node, deviceManager *oispv1alpha1.OispDevicesManager) (reconcile.Result, error) {
+	nameSpace := deviceManager.GetObjectMeta().GetNamespace()
+	nodeSelector := map[string]string{deviceManager.Spec.WatchLabelKey: deviceManager.Spec.WatchLabelValue}
+	template := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
+	dep := createDevicePluginDeploymentTemplate(node, nameSpace, nodeSelector, template, deviceManager.Spec.WatchAnnotationKey)
+	log.Info("Create Deployment", "dep", dep.Spec)
+	if err := controllerutil.SetControllerReference(dep, deviceManager, r.scheme); err != nil {
+		return reconcile.Result{}, err
+	}
+	found := &appsv1.Deployment{}
+	err := r.client.Get(context.TODO(), types.NamespacedName{Name: dep.Name, Namespace: dep.Namespace}, found)
+	if err != nil && errors.IsNotFound(err) {
+		log.Info("Creating a new Deployment", "Deployment.Name", dep.Name)
+		if err := r.client.Create(context.TODO(), dep); err != nil {
+			return reconcile.Result{}, err
+		}
+	} else { //deployment exists, update it
+		log.Info("Updating Deployment", "Deployment.Name", dep.Name)
+		if err := r.client.Update(context.TODO(), dep); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+	return reconcile.Result{}, nil
+}
+
 func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManager *oispv1alpha1.OispDevicesManager,
 	nodes map[string]*corev1.Node) (reconcile.Result, error) {
 	log.Info("createDevicePluginDeployment")
-	nameSpace := deviceManager.GetObjectMeta().GetNamespace()
-	nodeSelector := map[string]string{deviceManager.Spec.WatchLabelKey: deviceManager.Spec.WatchLabelValue}
 
-	template := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
-
-	for _, element := range nodes {
-		dep := createDevicePluginDeployment(element, nameSpace, nodeSelector, template, deviceManager.Spec.WatchAnnotationKey)
-		log.Info("Create Deployment", "dep", dep.Spec)
-		if err := controllerutil.SetControllerReference(dep, deviceManager, r.scheme); err != nil {
-			return reconcile.Result{}, err
-		}
-		found := &appsv1.Deployment{}
-		err := r.client.Get(context.TODO(), types.NamespacedName{Name: dep.Name, Namespace: dep.Namespace}, found)
-		if err != nil && errors.IsNotFound(err) {
-			log.Info("Creating a new Deployment", "Deployment.Name", dep.Name)
-			if err := r.client.Create(context.TODO(), dep); err != nil {
-				return reconcile.Result{}, err
-			}
-		} else { //deployment exists, update it
-			log.Info("Updating Deployment", "Deployment.Name", dep.Name)
-			if err := r.client.Update(context.TODO(), dep); err != nil {
-				return reconcile.Result{}, err
-			}
+	for _, node := range nodes {
+		rec, err := r.createOrUpdateDevicePluginDeployment(node, deviceManager)
+		if (err != nil) {
+			return rec, err
 		}
 	}
 	//controllerutil.SetControllerReference(deviceManager, dep, r.scheme)
@@ -261,7 +281,6 @@ func deserializeDeployment(filename string) *appsv1.Deployment {
 	dep := appsv1.Deployment{}
 	err = yaml.Unmarshal(dat, &dep)
 
-	//log.Info("after", "dep", dep.Spec, "err", err)
 	if err != nil {
 		return nil
 	}

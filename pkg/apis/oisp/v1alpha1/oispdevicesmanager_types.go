@@ -7,7 +7,6 @@ import (
 const (
 	PhasePending = "PENDING"
 	PhaseRunning = "RUNNING"
-	PhaseDone    = "DONE"
 	PhaseError 	 = "ERROR"
 )
 
