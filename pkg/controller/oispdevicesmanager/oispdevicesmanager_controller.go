@@ -33,6 +33,7 @@ import (
 )
 
 var log = logf.Log.WithName("controller_oispdevicesmanager")
+const oispDevicesManagerFinalizer = "finalizer.oisp.net"
 
 /**
 * USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
@@ -141,6 +142,33 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 			return reconcile.Result{}, generror.New("No Annotation key given")
 		}
 
+		//check whether resource is supposed to be deleted.
+		isOispDevicesManagerMarkedToBeDeleted := instance.GetDeletionTimestamp() != nil
+		if isOispDevicesManagerMarkedToBeDeleted {
+			log.Info("Detected finalized oispDeviceManager")
+			if contains(instance.GetFinalizers(), oispDevicesManagerFinalizer) {
+				if err := r.finalizeOispDevicesManager(instance); err != nil {
+					return reconcile.Result{}, err
+				}
+
+				// Remove OispDevicesManagerFinalizer. Once all finalizers have been
+				// removed, the object will be deleted.
+				instance.SetFinalizers(remove(instance.GetFinalizers(), oispDevicesManagerFinalizer))
+				err := r.client.Update(context.TODO(), instance)
+				if err != nil {
+					return reconcile.Result{}, err
+				}
+			}
+			return reconcile.Result{}, nil
+		}
+		// Add finalizer for this CR
+		if !contains(instance.GetFinalizers(), oispDevicesManagerFinalizer) {
+			if err := r.addFinalizer(instance); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
+
+		//
 		// At this point, labelkey and annkey should be defined properly
 		// LabelValue can be empty
 		// Get all Nodes which provid the right labels and annotations
@@ -169,32 +197,40 @@ func (r *ReconcileOispDevicesManager) Reconcile(request reconcile.Request) (reco
 		node := corev1.Node{}
 		err := r.client.Get(context.TODO(), request.NamespacedName, &node)
 		log.Info("node update request", "node", node.Name, "err", err)
-		//check for every devices manager whether node is listed
+		// Check for every devices manager whether node is listed
+		// If it is known, check whether relevant labels or annotations changed. If yes, create/update deployment and update node
+		// If it is unknown, check whether relevant info is given. If yes, add node to deviceManager and create deployment
 		for lk, _ := range r.deviceManagerNodes {
-			if (r.deviceManagerNodes[lk].nodes[node.Name] != nil) {
+			oldNode := r.deviceManagerNodes[lk].nodes[node.Name]
+			watchLabelKey := r.deviceManagerNodes[lk].deviceManager.Spec.WatchLabelKey
+			watchAnnKey := r.deviceManagerNodes[lk].deviceManager.Spec.WatchAnnotationKey
+			if (oldNode != nil) {
 				labels := r.deviceManagerNodes[lk].nodes[node.Name].GetObjectMeta().GetLabels()
 				annotations := r.deviceManagerNodes[lk].nodes[node.Name].GetObjectMeta().GetAnnotations()
 				log.Info("Marcel: Node exists already. Checking updates for labels and annotations", "deviceManager", lk)
-				if (reflect.DeepEqual(node.GetObjectMeta().GetLabels(), labels) && reflect.DeepEqual(node.GetObjectMeta().GetAnnotations(), annotations)) {
+				if (reflect.DeepEqual(node.GetObjectMeta().GetLabels(), labels) &&
+				reflect.DeepEqual(node.GetObjectMeta().GetAnnotations(), annotations)) {
 					log.Info("Node labels and annotations did not change.")
 					return reconcile.Result{}, nil //done, node did not change (from label and ann pov)
 				}
 				// Either Labels or Annotations changed. Investigate the changes and register node if appropriate
-				watchLabelKey := r.deviceManagerNodes[lk].deviceManager.Spec.WatchLabelKey
-				watchAnnKey := r.deviceManagerNodes[lk].deviceManager.Spec.WatchAnnotationKey
+				if (node.GetObjectMeta().GetLabels()[watchLabelKey] != oldNode.GetObjectMeta().GetLabels()[watchLabelKey] ||
+				node.GetObjectMeta().GetAnnotations()[watchAnnKey] != oldNode.GetObjectMeta().GetAnnotations()[watchAnnKey]) {
+					// oldNode should be updated
+					r.deviceManagerNodes[lk].nodes[node.Name] = node.DeepCopy()
+					r.createOrUpdateDevicePluginDeployment(&node, r.deviceManagerNodes[lk].deviceManager)
+				}
+			} else {
+				// Node is not known.
 				if (node.GetObjectMeta().GetLabels()[watchLabelKey] != "" && node.GetObjectMeta().GetAnnotations()[watchAnnKey] != "") {
-					// Node should be added to the list of the current deviceManager
-
+					r.deviceManagerNodes[lk].nodes[node.Name] = node.DeepCopy()
+					r.createOrUpdateDevicePluginDeployment(&node, r.deviceManagerNodes[lk].deviceManager)
 				}
 			}
 		}
 	}
 	reqLogger.Info("Job done.")
 	return reconcile.Result{}, nil
-}
-
-func getGlobalKey(key string, value string) string {
-	return key + "." + value
 }
 
 func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key string, value string, annotationKey string) (map[string]*corev1.Node, error) {
@@ -236,7 +272,7 @@ func (r *ReconcileOispDevicesManager) createOrUpdateDevicePluginDeployment(node 
 	template := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
 	dep := createDevicePluginDeploymentTemplate(node, nameSpace, nodeSelector, template, deviceManager.Spec.WatchAnnotationKey)
 	log.Info("Create Deployment", "dep", dep.Spec)
-	if err := controllerutil.SetControllerReference(dep, deviceManager, r.scheme); err != nil {
+	if err := controllerutil.SetControllerReference(deviceManager, dep, r.scheme); err != nil {
 		return reconcile.Result{}, err
 	}
 	found := &appsv1.Deployment{}
@@ -269,6 +305,27 @@ func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManage
 	return reconcile.Result{}, nil
 }
 
+func (r *ReconcileOispDevicesManager) finalizeOispDevicesManager(m *oispv1alpha1.OispDevicesManager) error {
+	//delete cached deviceManangerNodes struct
+	key := getGlobalKey(m.Spec.WatchLabelKey, m.Spec.WatchLabelValue)
+	delete(r.deviceManagerNodes, key)
+	log.Info("Successfully finalized OispDevicesManager")
+	return nil
+}
+
+func (r *ReconcileOispDevicesManager) addFinalizer(m *oispv1alpha1.OispDevicesManager) error {
+	log.Info("Adding Finalizer for oispDevicesManager")
+	m.SetFinalizers(append(m.GetFinalizers(), oispDevicesManagerFinalizer))
+
+	// Update CR
+	err := r.client.Update(context.TODO(), m)
+	if err != nil {
+		log.Error(err, "Failed to update OispDevicesMananger with finalizer")
+		return err
+	}
+	return nil
+}
+
 func labelsForDevicePlugin(name string) map[string]string {
 	return map[string]string{"app": "oisp-device-plugin"}
 }
@@ -285,4 +342,26 @@ func deserializeDeployment(filename string) *appsv1.Deployment {
 		return nil
 	}
 	return &dep
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+func remove(list []string, s string) []string {
+	for i, v := range list {
+		if v == s {
+			list = append(list[:i], list[i+1:]...)
+		}
+	}
+	return list
+}
+
+func getGlobalKey(key string, value string) string {
+	return key + "." + value
 }
