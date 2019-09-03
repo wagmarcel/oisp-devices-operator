@@ -1,0 +1,24 @@
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: oisp-devices-operator
+subjects:
+- kind: ServiceAccount
+  name: oisp-devices-operator
+roleRef:
+  kind: Role
+  name: oisp-devices-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: oisp-devices-operator
+subjects:
+- kind: ServiceAccount
+  name: oisp-devices-operator
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: oisp-devices-operator-nodes
+  apiGroup: rbac.authorization.k8s.io

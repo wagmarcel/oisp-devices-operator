@@ -1,0 +1,9 @@
+apiVersion: oisp.net/v1alpha1
+kind: OispDevicesManager
+metadata:
+  name: example-oispdevicesmanager
+spec:
+  # Add fields here
+  watchLabelKey: "deviceType"
+  watchLabelValue: "iot"
+  watchAnnotationKey: "deviceSpec"
