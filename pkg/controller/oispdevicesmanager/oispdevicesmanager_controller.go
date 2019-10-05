@@ -262,7 +262,7 @@ func createDevicePluginDeploymentTemplate(node *corev1.Node, nameSpace string,
 	replicas := int32(1)
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      basename + "-devicePlugin-deployment",
+			Name:      basename + "-deviceplugin-deployment",
 			Namespace: nameSpace,
 		},
 		Spec: appsv1.DeploymentSpec{
@@ -274,10 +274,13 @@ func createDevicePluginDeploymentTemplate(node *corev1.Node, nameSpace string,
 		},
 	}
 
+	log.Info("here", "nodeSelectr", nodeSelector )
 	//name := node.GetObjectMeta().GetName() + "-oispdevices-deployment"
 	//dep.GetObjectMeta().SetName(name)
 	//dep.GetObjectMeta().SetNamespace(nameSpace)
+
 	dep.Spec.Template.Spec.NodeSelector = nodeSelector
+	dep.Spec.Template.SetLabels(labels) //GetObjectMeta().SetLables(labels)
 	config := node.GetObjectMeta().GetAnnotations()[annKey]
 	configEnv := corev1.EnvVar{Name: "K8S_PLUGIN_CONFIG", Value: config}
 	dep.Spec.Template.Spec.Containers[0].Env = append(dep.Spec.Template.Spec.Containers[0].Env, configEnv)
@@ -347,8 +350,12 @@ func (r *ReconcileOispDevicesManager) addFinalizer(m *oispv1alpha1.OispDevicesMa
 }
 
 func labelsForDevicePlugin(ns map[string]string, basename string) map[string]string {
-	ns["app"] = basename + "-oisp-device-plugin"
-	return ns
+	labels := map[string]string{}
+	for k,v := range ns {
+		labels[k] = v
+	}
+	labels["app"] = basename + "-oisp-device-plugin"
+	return labels
 }
 
 func deserializeDeployment(filename string) *appsv1.Deployment {
