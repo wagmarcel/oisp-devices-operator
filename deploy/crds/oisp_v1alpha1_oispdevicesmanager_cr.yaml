@@ -6,4 +6,39 @@ spec:
   # Add fields here
   watchLabelKey: "deviceType"
   watchLabelValue: "iot"
-  watchAnnotationKey: "deviceSpec"
+  watchAnnotationKey: "oisp.org/deviceSpec"
+  podTemplateSpec:
+      metadata:
+        labels:
+          app: oisp-iot-plugin
+      spec:
+        containers:
+        - name: oisp-iot-plugin
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          image: wagmarcel/iot-plugin:devel
+          command: ["/usr/bin/iot_device_plugin"]
+          args: [ "-debug", "-device-plugin-path", "/var/lib/rancher/k3s/agent/kubelet/device-plugins/"]
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+          - name: devfs
+            mountPath: /dev
+          - name: sysfs
+            mountPath: /sys
+          - name: kubeletsockets
+            mountPath: /var/lib/rancher/k3s/agent/kubelet/device-plugins/
+        nodeSelector:
+          deviceType: iot
+        volumes:
+        - name: devfs
+          hostPath:
+            path: /dev
+        - name: sysfs
+          hostPath:
+            path: /sys
+        - name: kubeletsockets
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/kubelet/device-plugins/

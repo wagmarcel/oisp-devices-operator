@@ -65,10 +65,40 @@ func schema_pkg_apis_oisp_v1alpha1_OispDevicesManagerSpec(ref common.ReferenceCa
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
 				Description: "OispDevicesManagerSpec defines the desired state of OispDevicesManager",
-				Properties:  map[string]spec.Schema{},
+				Properties: map[string]spec.Schema{
+					"watchLabelKey": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Label name to identify oisp-managed nodes",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"watchLabelValue": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Label value",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"watchAnnotationKey": {
+						SchemaProps: spec.SchemaProps{
+							Description: "annotation name which contains the device resource description",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"podTemplateSpec": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PodTemplate for every plugin deployment",
+							Ref:         ref("k8s.io/api/core/v1.PodTemplateSpec"),
+						},
+					},
+				},
+				Required: []string{"watchLabelKey", "watchLabelValue", "watchAnnotationKey", "podTemplateSpec"},
 			},
 		},
-		Dependencies: []string{},
+		Dependencies: []string{
+			"k8s.io/api/core/v1.PodTemplateSpec"},
 	}
 }
 
@@ -77,7 +107,15 @@ func schema_pkg_apis_oisp_v1alpha1_OispDevicesManagerStatus(ref common.Reference
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
 				Description: "OispDevicesManagerStatus defines the observed state of OispDevicesManager",
-				Properties:  map[string]spec.Schema{},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State of the CRD owning operator",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
 			},
 		},
 		Dependencies: []string{},

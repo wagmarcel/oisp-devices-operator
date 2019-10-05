@@ -28,8 +28,30 @@ spec:
         metadata:
           type: object
         spec:
+          properties:
+            podTemplateSpec:
+              description: PodTemplate for every plugin deployment
+              type: object
+            watchAnnotationKey:
+              description: annotation name which contains the device resource description
+              type: string
+            watchLabelKey:
+              description: Label name to identify oisp-managed nodes
+              type: string
+            watchLabelValue:
+              description: Label value
+              type: string
+          required:
+          - watchLabelKey
+          - watchLabelValue
+          - watchAnnotationKey
+          - podTemplateSpec
           type: object
         status:
+          properties:
+            phase:
+              description: State of the CRD owning operator
+              type: string
           type: object
   version: v1alpha1
   versions:

@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 const (
@@ -13,10 +14,14 @@ const (
 // OispDevicesManagerSpec defines the desired state of OispDevicesManager
 // +k8s:openapi-gen=true
 type OispDevicesManagerSpec struct {
-	// Tag to identify oisp-managed nodes
+	// Label name to identify oisp-managed nodes
 	WatchLabelKey string `json:"watchLabelKey"`
+	// Label value
 	WatchLabelValue string `json:"watchLabelValue"`
+	// annotation name which contains the device resource description
 	WatchAnnotationKey string `json:"watchAnnotationKey"`
+	// PodTemplate for every plugin deployment
+	PodTemplateSpec corev1.PodTemplateSpec `json:"podTemplateSpec"`
 }
 
 // OispDevicesManagerStatus defines the observed state of OispDevicesManager

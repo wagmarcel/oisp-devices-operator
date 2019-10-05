@@ -16,7 +16,7 @@ import (
 	//"k8s.io/apimachinery/pkg/runtime/serializer/json"
 	//"k8s.io/client-go/kubernetes/scheme"
 	//"k8s.io/apimachinery/pkg/runtime/schema"
-	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -254,23 +254,42 @@ func (r *ReconcileOispDevicesManager) getNodesWithLabelAndSensorAnnotation(key s
 }
 
 func createDevicePluginDeploymentTemplate(node *corev1.Node, nameSpace string,
-	nodeSelector map[string]string, template *appsv1.Deployment, annKey string) *appsv1.Deployment {
-	dep := template.DeepCopy()
-	name := node.GetObjectMeta().GetName() + "-oispdevices-deployment"
-	dep.GetObjectMeta().SetName(name)
-	dep.GetObjectMeta().SetNamespace(nameSpace)
+	nodeSelector map[string]string, template *corev1.PodTemplateSpec, annKey string) *appsv1.Deployment {
+	log.Info("start createDEvicePluginDeploymentTemplate")
+	temp := template.DeepCopy()
+	basename := node.GetObjectMeta().GetName()
+	labels := labelsForDevicePlugin(nodeSelector, basename)
+	replicas := int32(1)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      basename + "-devicePlugin-deployment",
+			Namespace: nameSpace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: *temp,
+		},
+	}
+
+	//name := node.GetObjectMeta().GetName() + "-oispdevices-deployment"
+	//dep.GetObjectMeta().SetName(name)
+	//dep.GetObjectMeta().SetNamespace(nameSpace)
 	dep.Spec.Template.Spec.NodeSelector = nodeSelector
 	config := node.GetObjectMeta().GetAnnotations()[annKey]
-	configEnv := corev1.EnvVar{Name: "PLUGIN_CONFIG", Value: config}
+	configEnv := corev1.EnvVar{Name: "K8S_PLUGIN_CONFIG", Value: config}
 	dep.Spec.Template.Spec.Containers[0].Env = append(dep.Spec.Template.Spec.Containers[0].Env, configEnv)
 	return dep
 }
 
 func (r *ReconcileOispDevicesManager) createOrUpdateDevicePluginDeployment(node *corev1.Node, deviceManager *oispv1alpha1.OispDevicesManager) (reconcile.Result, error) {
+	log.Info("start createOrUpdateDevicePluginDeployment")
 	nameSpace := deviceManager.GetObjectMeta().GetNamespace()
 	nodeSelector := map[string]string{deviceManager.Spec.WatchLabelKey: deviceManager.Spec.WatchLabelValue}
-	template := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
-	dep := createDevicePluginDeploymentTemplate(node, nameSpace, nodeSelector, template, deviceManager.Spec.WatchAnnotationKey)
+	//template := deserializeDeployment("deploy/templates/oisp-iot-plugin-deployment.yaml")
+	dep := createDevicePluginDeploymentTemplate(node, nameSpace, nodeSelector, &deviceManager.Spec.PodTemplateSpec, deviceManager.Spec.WatchAnnotationKey)
 	log.Info("Create Deployment", "dep", dep.Spec)
 	if err := controllerutil.SetControllerReference(deviceManager, dep, r.scheme); err != nil {
 		return reconcile.Result{}, err
@@ -293,7 +312,7 @@ func (r *ReconcileOispDevicesManager) createOrUpdateDevicePluginDeployment(node 
 
 func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManager *oispv1alpha1.OispDevicesManager,
 	nodes map[string]*corev1.Node) (reconcile.Result, error) {
-	log.Info("createDevicePluginDeployment")
+	log.Info("start createDevicePluginDeployment", "nodes", nodes)
 
 	for _, node := range nodes {
 		rec, err := r.createOrUpdateDevicePluginDeployment(node, deviceManager)
@@ -301,6 +320,7 @@ func (r *ReconcileOispDevicesManager) createDevicePluginDeployments(deviceManage
 			return rec, err
 		}
 	}
+	log.Info("end createDevicePluginDeployment")
 	//controllerutil.SetControllerReference(deviceManager, dep, r.scheme)
 	return reconcile.Result{}, nil
 }
@@ -326,8 +346,9 @@ func (r *ReconcileOispDevicesManager) addFinalizer(m *oispv1alpha1.OispDevicesMa
 	return nil
 }
 
-func labelsForDevicePlugin(name string) map[string]string {
-	return map[string]string{"app": "oisp-device-plugin"}
+func labelsForDevicePlugin(ns map[string]string, basename string) map[string]string {
+	ns["app"] = basename + "-oisp-device-plugin"
+	return ns
 }
 
 func deserializeDeployment(filename string) *appsv1.Deployment {
