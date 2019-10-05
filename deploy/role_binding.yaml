@@ -20,5 +20,18 @@ subjects:
   namespace: default
 roleRef:
   kind: ClusterRole
-  name: oisp-devices-operator-nodes
+  name: node-watcher
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: oisp-devices-operator-crd
+subjects:
+- kind: ServiceAccount
+  name: oisp-devices-operator
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: oispdevicesmanager-watcher
   apiGroup: rbac.authorization.k8s.io

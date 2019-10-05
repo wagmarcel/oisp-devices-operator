@@ -53,21 +53,9 @@ rules:
   - replicasets
   verbs:
   - get
-- apiGroups: ['oisp.net']
-  resources: ['oispdevicesmanagers']
-  verbs: ['*']
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  creationTimestamp: null
-  name: oisp-devices-operator-nodes
-rules:
 - apiGroups:
-    - ""
+  - oisp.net
   resources:
-    - nodes
-  verbs: ['watch', 'list', 'get']
-- apiGroups: ['oisp.net']
-  resources: ['oispdevicesmanagers']
-  verbs: ['*']
+  - '*'
+  verbs:
+  - '*'
