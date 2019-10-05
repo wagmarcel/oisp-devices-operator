@@ -279,7 +279,7 @@ func createDevicePluginDeploymentTemplate(node *corev1.Node, nameSpace string,
 	//dep.GetObjectMeta().SetName(name)
 	//dep.GetObjectMeta().SetNamespace(nameSpace)
 
-	dep.Spec.Template.Spec.NodeSelector = nodeSelector
+	dep.Spec.Template.Spec.NodeName = basename
 	dep.Spec.Template.SetLabels(labels) //GetObjectMeta().SetLables(labels)
 	config := node.GetObjectMeta().GetAnnotations()[annKey]
 	configEnv := corev1.EnvVar{Name: "K8S_PLUGIN_CONFIG", Value: config}
