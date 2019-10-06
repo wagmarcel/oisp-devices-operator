@@ -6,7 +6,7 @@ spec:
   # Add fields here
   watchLabelKey: "deviceType"
   watchLabelValue: "iot"
-  watchAnnotationKey: "oisp.org/deviceSpec"
+  watchAnnotationKey: "oisp.net/deviceSpec"
   podTemplateSpec:
       metadata:
         labels:
