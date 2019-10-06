@@ -267,6 +267,9 @@ func createDevicePluginDeploymentTemplate(node *corev1.Node, nameSpace string,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: "Recreate",
+			},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
